@@ -226,4 +226,6 @@ If we're dealing with language, it doesn't account for varying capitalization, s
 
 <!-- livebook:{"break_markdown":true} -->
 
-If you liked this Livebook, follow me on [Twitter @thmsmlr](https://twitter.com/thmsmlr) for more Machine Learning and Elixir content
+If you liked this Livebook, follow me on [Twitter @thmsmlr](https://twitter.com/thmsmlr) for more Machine Learning and Elixir content.
+
+Here is a link to the [original paper](https://aclanthology.org/2023.findings-acl.426.pdf).
