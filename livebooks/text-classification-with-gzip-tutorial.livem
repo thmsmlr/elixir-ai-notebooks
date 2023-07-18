@@ -1,0 +1,229 @@
+<!-- livebook:{"persist_outputs":true} -->
+
+# Classifying Text with GZIP
+
+## Introduction
+
+[H'okay so](https://www.youtube.com/watch?v=ND9_b81_Dyc&).. you've been on Twitter this past week and you saw that all the AI people [lost their shit because GZIP beat out BERT](https://twitter.com/LukeGessler/status/1679211291292889100), a 350M parameter neural network, in text classification. You think, that sounds important, but who the hell is BERT and what does compression have to do with classification?
+
+Well dear reader, you stumbled on the right [Livebook](https://livebook.dev). Let me explain.
+
+## A Primer on Text Classification
+
+If you've read about text classification prior, you have probably stumbled into posts about neural networks, tokenizer/featurizers, etc. While all these methods obviously work, we can boil the problem down much more simply.
+
+Fundamentally, text classification is a function `f(text) -> class` where text that is similar maps to the same class.
+
+That's all we have to keep in our head. Text that is similar maps to the same class. Therefore, if we can create a function `g(x1, x2) -> [0,1]` where if x1, x2 are similar then `g(x1,x2) = 1` and conversely if x1, x2 are dissimilar `g(x1,x2) = 0`.
+
+For example, let's try to create a similarity metric based on whether two strings have similar proportions of digits.
+
+```elixir
+# Text is similar if they share a similar proportion of digits.
+similarity = fn text1, text2 ->
+  percent_digits = fn text ->
+    digits =
+      String.codepoints(text)
+      |> Enum.filter(&String.match?(&1, ~r/^\d$/))
+
+    total = String.length(text)
+    length(digits) / total
+  end
+
+  pct_num_1 = percent_digits.(text1)
+  pct_num_2 = percent_digits.(text2)
+  # e^(-|X-Y|), don't worry too much about this math, it maps to [0,1] :)
+  :math.exp(-abs(pct_num_1 - pct_num_2))
+end
+
+training_set = [
+  {"1235.345+2345.2", "math"},
+  {"7823647*2347/2", "math"},
+  {"3.52381/3**22356", "math"},
+  {"299792458", "math"},
+  {"The quick brown fox jumps over the lazy dog.", "english"},
+  {"Artificial intelligence is transforming the world in unprecedented ways.", "english"},
+  {"The concept of a universal Turing machine is foundational to computer science.", "english"},
+  {"Pangrams are sentences that use every letter of the alphabet at least 1 time.", "english"}
+]
+
+[digit1, digit2] =
+  training_set |> Enum.filter(&(elem(&1, 1) == "math")) |> Enum.take(2) |> Enum.map(&elem(&1, 0))
+
+[alpha1, alpha2] =
+  training_set
+  |> Enum.filter(&(elem(&1, 1) == "english"))
+  |> Enum.take(2)
+  |> Enum.map(&elem(&1, 0))
+
+IO.puts("similarity.(\"#{digit1}\", \"#{alpha1}\"} \n\t= #{similarity.(digit1, alpha1)}")
+IO.puts("similarity.(\"#{digit1}\", \"#{digit2}\"} \n\t= #{similarity.(digit1, digit2)}")
+IO.puts("similarity.(\"#{alpha1}\", \"#{alpha2}\"} \n\t= #{similarity.(alpha1, alpha2)}")
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+similarity.("1235.345+2345.2", "The quick brown fox jumps over the lazy dog."} 
+	= 0.44932896411722156
+similarity.("1235.345+2345.2", "7823647*2347/2"} 
+	= 0.9444591369948699
+similarity.("The quick brown fox jumps over the lazy dog.", "Artificial intelligence is transforming the world in unprecedented ways."} 
+	= 1.0
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+Then we can then devise a pretty simple algorithm whereby for some new text, `t1`, take the top `k` most similar examples from the training set and return the most common label among them.
+
+The key thing to note here is that we don't know how to specifically define the classes, but rather can infer membership to a class by using prior examples.
+
+```elixir
+predict = fn training_set, text, similarity_func ->
+  k = round(length(training_set) * 0.3)
+
+  training_set
+  # Calculate the similarity with every example in the training set
+  |> Enum.map(fn {training_text, class} ->
+    {class, similarity_func.(training_text, text)}
+  end)
+  # Of the top k closest training examples
+  |> Enum.sort_by(&elem(&1, 1), :desc)
+  |> Enum.take(k)
+  # Take the most common label
+  |> Enum.group_by(&elem(&1, 0))
+  |> Enum.max_by(fn {_, v} -> length(v) end)
+  |> elem(0)
+end
+
+["My name is Thomas, it's 2023", "89/235+4"]
+|> Enum.each(
+  &IO.puts(
+    "training_set |> predict.(\"#{&1}\") \n\t= #{training_set |> predict.(&1, similarity)}"
+  )
+)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+training_set |> predict.("My name is Thomas, it's 2023") 
+	= english
+training_set |> predict.("89/235+4") 
+	= math
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+You could imagine measuring similarity by length, use of english words, frequency of terms in the group versus out of the group ([TFIDF](https://en.wikipedia.org/wiki/Tf–idf)). Regardless of the metric, the predict function could be the same — how similar is the new text to the previous examples of known classes. Take the most common.
+
+Okay, but what does this have to do Gzip? How could Gzip be a text similarity metric?
+
+## And now for the GZIP
+
+Well let's get a refresher on what gzip is. At it's core it's a compression algorithm. It looks at bytes, finds common patterns and more efficiently encodes them using dictionary, run-length, and other encoding schemes.
+
+Text that is repeated, compresses better.
+
+To demonstrate,
+
+```elixir
+random_alphanumeric = fn ->
+  alphanumerics = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  index = :rand.uniform(String.length(alphanumerics)) - 1
+  String.at(alphanumerics, index)
+end
+
+string_length = 100
+repeated_string = Stream.cycle(["a", "b", "c"]) |> Enum.take(string_length) |> Enum.join()
+random_string = Stream.repeatedly(random_alphanumeric) |> Enum.take(string_length) |> Enum.join()
+
+byte_size(:zlib.compress(repeated_string)) < byte_size(:zlib.compress(random_string))
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+true
+```
+
+See where we're going with this?
+
+It turns out that for many text classification problems, in-class text tends to share a lot of the same words compared with out-of-class text. Therefore if we concatenate two strings and compress them, their byte length will be smaller when they're within the same class then when they are examples of different classes. Hence a similarity metric, and we can use our algorithm above!
+
+```elixir
+# Text is similar if their gzip well together
+similarity = fn text1, text2 ->
+  compressed_length = fn text ->
+    :zlib.compress(text) |> byte_size()
+  end
+
+  ctext1 = compressed_length.(text1)
+  ctext2 = compressed_length.(text2)
+  text1text2 = "#{text1} #{text2}"
+  ctext1text2 = compressed_length.(text1text2)
+  # Don't worry too much about this math, basically maps it from [0, 1]
+  1 - (ctext1text2 - min(ctext1, ctext2)) / max(ctext1, ctext2)
+end
+
+training_set = [
+  {"https://www.youtube.com/watch?v=Odp0lsGEnhI", "video"},
+  {"https://www.youtube.com/watch?v=5V0_t3QvKts", "video"},
+  {"https://www.youtube.com/watch?v=5ccLC9oz6PU", "video"},
+  {"https://twitter.com/thmsmlr", "text"},
+  {"https://twitter.com/sean_moriarity", "text"},
+  {"https://twitter.com/josevalim", "text"}
+]
+
+["https://twitter.com/chris_mccord", "https://www.youtube.com/@GolfSidekick"]
+|> Enum.each(
+  &IO.puts(
+    "training_set |> predict.(\"#{&1}\") \n\t= #{training_set |> predict.(&1, similarity)}"
+  )
+)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+training_set |> predict.("https://twitter.com/chris_mccord") 
+	= text
+training_set |> predict.("https://www.youtube.com/@GolfSidekick") 
+	= video
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+And there we have it. The infamous GZIP text classifier. All in pure elixir. I suppose you could implement parts of this using [nx](https://github.com/elixir-nx/nx) for more efficiency, but you now get the gist.
+
+## Building Intuition
+
+Okay so i'll admit, the examples I gave above are cute, simple examples. Let's further develop our intuition of when this is likely to work well, and when it's not.
+
+One of the benefits of using gzip, over something like Bag of Words or TFIDF features is that they retain positional information and they don't require a tokenizer because gzip works at a byte level. GZIP is availble in every language, and K-Nearnest Neighbors is a very simple algorithm to implement. This is a great tool to have in your toolkit when you're in an environment without a robust machine learning community.
+
+Furthermore, there is no training, no optimization, no gradient descent, no model weights, no hyper-parameters. It's just a simple, pure algorithm.
+
+On the other hand, this only works if the exact byte sequences is commonly found in the examples for a class. This technique probably shows its weakness with shorter strings and classes that have lots of in-class diversity and overlaps across classes.
+
+If we're dealing with language, it doesn't account for varying capitalization, synonyms, abbrevations, etc. That being said, one quirk about language though is that words that convey similar ideas tend to have similar etymology. This was summarized well in a [tweet exchange](https://twitter.com/jxnlco/status/1680657791965380608) I saw earlier today.
+
+> @alexgraveley: Gzip doesn't capture synonym, antonym, homonym, hypernym, hyponym, polysemy - i.e. the reason text embeddings are useful.
+> 
+> @jxnlco: It's funny because gzip distance would have captured all those words as similar to eachother
+
+<!-- livebook:{"break_markdown":true} -->
+
+If you liked this Livebook, follow me on [Twitter @thmsmlr](https://twitter.com/thmsmlr) for more Machine Learning and Elixir content
