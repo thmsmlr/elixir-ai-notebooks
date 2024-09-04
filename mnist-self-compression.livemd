@@ -257,29 +257,29 @@ Axon.Display.as_graph(model, Nx.template({60_000, 28, 28, 1}, :f32))
 
 ```mermaid
 graph TD;
-161[/"input (:input) {60000, 28, 28, 1}"/];
-162["qconv_0 (:qconv) {60000, 26, 26, 16}"];
-163["relu_0 (:relu) {60000, 26, 26, 16}"];
-164["max_pool_0 (:max_pool) {60000, 13, 13, 16}"];
-165["qconv_1 (:qconv) {60000, 11, 11, 32}"];
-166["relu_1 (:relu) {60000, 11, 11, 32}"];
-167["max_pool_1 (:max_pool) {60000, 5, 5, 32}"];
-168["flatten_0 (:flatten) {60000, 800}"];
-169["dense_0 (:dense) {60000, 128}"];
-170["relu_2 (:relu) {60000, 128}"];
-171["dense_1 (:dense) {60000, 10}"];
-172["softmax_0 (:softmax) {60000, 10}"];
-171 --> 172;
-170 --> 171;
-169 --> 170;
-168 --> 169;
-167 --> 168;
-166 --> 167;
-165 --> 166;
-164 --> 165;
-163 --> 164;
-162 --> 163;
-161 --> 162;
+13[/"input (:input) {60000, 28, 28, 1}"/];
+14["qconv_0 (:qconv) {60000, 26, 26, 16}"];
+15["relu_0 (:relu) {60000, 26, 26, 16}"];
+16["max_pool_0 (:max_pool) {60000, 13, 13, 16}"];
+17["qconv_1 (:qconv) {60000, 11, 11, 32}"];
+18["relu_1 (:relu) {60000, 11, 11, 32}"];
+19["max_pool_1 (:max_pool) {60000, 5, 5, 32}"];
+20["flatten_0 (:flatten) {60000, 800}"];
+21["dense_0 (:dense) {60000, 128}"];
+22["relu_2 (:relu) {60000, 128}"];
+23["dense_1 (:dense) {60000, 10}"];
+24["softmax_0 (:softmax) {60000, 10}"];
+23 --> 24;
+22 --> 23;
+21 --> 22;
+20 --> 21;
+19 --> 20;
+18 --> 19;
+17 --> 18;
+16 --> 17;
+15 --> 16;
+14 --> 15;
+13 --> 14;
 ```
 
 ```elixir
@@ -321,7 +321,7 @@ test_labels =
 ```
 #Nx.Tensor<
   u8[10000][10]
-  EXLA.Backend<host:0, 0.3988696439.964558866.21681>
+  EXLA.Backend<host:0, 0.3557065691.1709834263.94097>
   [
     [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
     [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
@@ -334,18 +334,30 @@ test_labels =
 ```
 
 ```elixir
+defmodule SelfCompressingLoss do
+  import Nx.Defn
+
+  deftransform loss(y_true, y_pred, opts \\ []) do
+    raise "foobar"
+    l = Axon.Losses.categorical_cross_entropy(y_true, y_pred, opts)
+    l
+  end
+end
+
+loss_fn = &SelfCompressingLoss.loss(&1, &2, reduction: :mean)
+
 params =
   model
-  |> Axon.Loop.trainer(:categorical_cross_entropy, :adam)
+  |> Axon.Loop.trainer(loss_fn, :adam)
   |> Axon.Loop.metric(:accuracy, "Accuracy")
   |> Axon.Loop.validate(model, [{test_images, test_labels}], event: :epoch_completed)
-  |> Axon.Loop.run(Stream.zip(images, labels), %{}, epochs: 10, compiler: EXLA)
+  |> Axon.Loop.run(Stream.zip(images, labels), %{}, epochs: 2, compiler: EXLA)
 ```
 
 <!-- livebook:{"output":true} -->
 
 ```
+
+16:57:38.276 [debug] Forwarding options: [compiler: EXLA] to JIT compiler
 Epoch: 0, Batch: 1850, Accuracy: 0.1123717 loss: 2.3014505
-Epoch: 1, Batch: 1825, Accuracy: 0.1125069 loss: 2.3013668
-Epoch: 2, Batch: 350, Accuracy: 0.1126246 loss: 2.3013203
 ```
